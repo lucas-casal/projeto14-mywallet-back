@@ -55,20 +55,28 @@ app.post('/', async (req, res) =>{
         const user = await db.collection('users').findOne({email: email})
         if (!user) return res.sendStatus(404)
         if (!bcrypt.compareSync(password, user.password)) return res.sendStatus(401)
-        
+       
+
         const token = uuid()
-        delete user.password
+        const userId = user._id
+        user.userId = userId
         user.token = token
+        delete user.password
+        delete user._id
+        const anotherSession = await db.collection('sessions').findOne({userId})
+        if (anotherSession){
+        await db.collection('sessions').deleteOne({userId})
+        }
         await db.collection('sessions').insertOne(user)
         console.log(user)
-        res.status(200).send(token)    
+        res.status(200).send(token)  
     }
     catch{
-        res.sendStatus(400)
+        res.sendStatus(425)
     }
 })
 
-app.delete('/', async (req, res) => {
+app.delete('/home', async (req, res) => {
     const {token} = req.headers;
     if(!token) return res.sendStatus(422)
 
@@ -82,46 +90,14 @@ app.delete('/', async (req, res) => {
     }
 })
 
-app.post('/nova-transacao/:tipo', async (req, res) => {
-    const {tipo} = req.params;
-    const {token} = req.headers;
-    const {value, description} = req.body;
-    const schema = Joi.object({
-        tipo: Joi.string().valid('entrada', 'saida').required(),
-        token: Joi.string().required(),
-        value:Joi.number().positive().required(),
-        description:Joi.string().required()
-    })
-
-    const transaction = {tipo, token, value, description}
-    if(schema.validate(transaction).error) return res.sendStatus(422)
-    try{
-        const {userId} = await db.collection('sessions').findOne({token});
-        if (!userId) return res.sendStatus(401);
-        const user = await db.collection('users').findOne({_id: userId});
-        transaction.userId = userId
-        transaction.time = dayjs(Date.now()).format('HH:mm:ss')
-        let saldo = parseFloat(user.balance);
-        const valor = parseFloat(value)
-        tipo === "entrada" ? saldo += valor : saldo -= valor
-        await db.collection('transactions').insertOne(transaction)
-        await db.collection('users').updateOne({_id: userId}, {$set:{balance: saldo}})
-        res.sendStatus(200)
-        console.log(saldo)
-    }
-    catch{
-        res.sendStatus(400)
-    }
-})
-
 app.get('/home', async (req, res) => {
     const {token} = req.headers;
     if(!token) return res.sendStatus(401);
 
     try{
-        const {_id, name, balance} = await db.collection('sessions').findOne({token})
+        const {userId, name, balance} = await db.collection('sessions').findOne({token})
 
-        const relatedTransactions = await db.collection('transactions').find({userId: _id}).toArray()
+        const relatedTransactions = await db.collection('transactions').find({userId}).toArray()
 
         res.status(200).send({name, balance, relatedTransactions})
         
@@ -132,7 +108,38 @@ app.get('/home', async (req, res) => {
 
 })
 
-
+app.post('/nova-transacao/:tipo', async (req, res) => {
+    const {tipo} = req.params;
+    const {token} = req.headers;
+    const {value, description} = req.body;
+    const schema = Joi.object({
+        tipo: Joi.string().valid('entrada', 'saida').required(),
+        token: Joi.string().required(),
+        value:Joi.number().positive().required(),
+        description:Joi.string().required()
+    })
+    console.log(req.body)
+    const transaction = {tipo, token, value, description}
+    if(schema.validate(transaction).error) return res.status(422).send(schema.validate(transaction).error)
+    try{
+        const {userId} = await db.collection('sessions').findOne({token});
+        if (!userId) return res.sendStatus(401);
+        const user = await db.collection('users').findOne({_id: userId});
+        transaction.userId = userId
+        transaction.time = dayjs(Date.now()).format('DD/MM')
+        let saldo = parseFloat(user.balance);
+        let valor = parseFloat(value)
+        tipo === "entrada" ? saldo += valor : saldo -= valor
+        
+        await db.collection('transactions').insertOne(transaction)
+        await db.collection('users').updateOne({_id: userId}, {$set:{balance: saldo.toFixed(2)}})
+        await db.collection('sessions').updateOne({userId: userId}, {$set:{balance: saldo.toFixed(2)}})
+        res.sendStatus(200)
+    }
+    catch{
+        res.sendStatus(400)
+    }
+})
 
 
 
